@@ -372,52 +372,52 @@ async def test_aupdate_message_with_nested_properties(created_message):
 class TestMessageBaseFromMessageFilePaths:
     """Tests for the file path handling in MessageBase.from_message."""
 
-    def test_from_message_with_session_id_in_file_path(self):
-        """Test that file paths containing session_id are correctly processed."""
+    def test_from_message_with_flow_id_in_file_path(self):
+        """Test that file paths containing flow_id are correctly normalized."""
         from langflow.services.database.models.message.model import MessageTable
         from lfx.schema.image import Image
 
-        session_id = "test-session-123"
-        file_path = f"/uploads/{session_id}/image.png"
+        flow_id = uuid4()
+        file_path = f"/uploads/{flow_id}/image.png"
         img = Image(path=file_path, url=f"http://example.com{file_path}")
 
         message = Message(
             text="Test message",
             sender="User",
             sender_name="User",
-            session_id=session_id,
+            session_id=str(flow_id),
             files=[img],
         )
 
-        result = MessageTable.from_message(message, flow_id=uuid4())
+        result = MessageTable.from_message(message, flow_id=flow_id)
 
         assert len(result.files) == 1
-        assert result.files[0] == f"{session_id}/image.png"
+        assert result.files[0] == f"{flow_id}/image.png"
 
-    def test_from_message_with_session_id_not_in_file_path(self):
-        """Test that file paths NOT containing session_id are preserved as-is."""
+    def test_from_message_with_flow_id_not_in_file_path(self):
+        """Test that file paths NOT containing flow_id are preserved as-is."""
         from langflow.services.database.models.message.model import MessageTable
         from lfx.schema.image import Image
 
-        session_id = "test-session-123"
-        file_path = "/uploads/other-session/image.png"
+        flow_id = uuid4()
+        file_path = "/uploads/other-folder/image.png"
         img = Image(path=file_path, url=f"http://example.com{file_path}")
 
         message = Message(
             text="Test message",
             sender="User",
             sender_name="User",
-            session_id=session_id,
+            session_id="test-session-123",
             files=[img],
         )
 
-        result = MessageTable.from_message(message, flow_id=uuid4())
+        result = MessageTable.from_message(message, flow_id=flow_id)
 
         assert len(result.files) == 1
         assert result.files[0] == file_path
 
-    def test_from_message_with_no_session_id(self):
-        """Test that file paths are preserved when session_id is empty."""
+    def test_from_message_with_no_flow_id(self):
+        """Test that file paths are preserved when flow_id is None."""
         from langflow.services.database.models.message.model import MessageTable
         from lfx.schema.image import Image
 
@@ -432,91 +432,90 @@ class TestMessageBaseFromMessageFilePaths:
             files=[img],
         )
 
-        result = MessageTable.from_message(message, flow_id=uuid4())
+        result = MessageTable.from_message(message, flow_id=None)
 
         assert len(result.files) == 1
         assert result.files[0] == file_path
 
-    def test_from_message_with_session_id_at_end_of_path(self):
-        """Test edge case where session_id is at the end of path (no parts after split)."""
+    def test_from_message_with_flow_id_at_end_of_path(self):
+        """Test edge case where flow_id is at the end of path (no parts after split)."""
         from langflow.services.database.models.message.model import MessageTable
         from lfx.schema.image import Image
 
-        session_id = "test-session-123"
-        # Path ends with session_id - split will have empty second part
-        file_path = f"/uploads/{session_id}"
+        flow_id = uuid4()
+        # Path ends with flow_id - split will have empty second part
+        file_path = f"/uploads/{flow_id}"
         img = Image(path=file_path, url=f"http://example.com{file_path}")
 
         message = Message(
             text="Test message",
             sender="User",
             sender_name="User",
-            session_id=session_id,
+            session_id="some-session",
             files=[img],
         )
 
-        result = MessageTable.from_message(message, flow_id=uuid4())
+        result = MessageTable.from_message(message, flow_id=flow_id)
 
         assert len(result.files) == 1
-        # When split produces ["uploads/", ""], we get session_id + ""
-        assert result.files[0] == f"{session_id}"
-
-    def test_from_message_with_multiple_session_id_occurrences(self):
-        """Test file path with multiple occurrences of session_id.
-
-        Note: str.split() splits on ALL occurrences. With path "/uploads/abc/folder/abc/image.png"
-        and session_id "abc", split gives ["uploads/", "/folder/", "/image.png"].
-        parts[1] is "/folder/" so result is "abc/folder/".
-        """
-        from langflow.services.database.models.message.model import MessageTable
-        from lfx.schema.image import Image
-
-        session_id = "abc"
-        # Path has session_id appearing twice
-        file_path = f"/uploads/{session_id}/folder/{session_id}/image.png"
-        img = Image(path=file_path, url=f"http://example.com{file_path}")
-
-        message = Message(
-            text="Test message",
-            sender="User",
-            sender_name="User",
-            session_id=session_id,
-            files=[img],
-        )
-
-        result = MessageTable.from_message(message, flow_id=uuid4())
-
-        assert len(result.files) == 1
-        # split() divides em todas as ocorrências: parts = ["/uploads/", "/folder/", "/image.png"]
-        # parts[1] = "/folder/", então resultado = "abc/folder/"
-        assert result.files[0] == f"{session_id}/folder/"
+        # When split produces ["uploads/", ""], we get flow_id + ""
+        assert result.files[0] == str(flow_id)
 
     def test_from_message_with_multiple_files_mixed_paths(self):
         """Test multiple files with different path scenarios."""
         from langflow.services.database.models.message.model import MessageTable
         from lfx.schema.image import Image
 
-        session_id = "session-xyz"
+        flow_id = uuid4()
+        fid = str(flow_id)
         images = [
-            Image(path=f"/uploads/{session_id}/image1.png", url="http://example.com/1"),
+            Image(path=f"/uploads/{fid}/image1.png", url="http://example.com/1"),
             Image(path="/uploads/other-folder/image2.png", url="http://example.com/2"),
-            Image(path=f"/data/{session_id}/docs/file.pdf", url="http://example.com/3"),
+            Image(path=f"/data/{fid}/docs/file.pdf", url="http://example.com/3"),
         ]
 
         message = Message(
             text="Test message",
             sender="User",
             sender_name="User",
-            session_id=session_id,
+            session_id="session-xyz",
             files=images,
         )
 
-        result = MessageTable.from_message(message, flow_id=uuid4())
+        result = MessageTable.from_message(message, flow_id=flow_id)
 
         assert len(result.files) == 3
-        assert result.files[0] == f"{session_id}/image1.png"
+        assert result.files[0] == f"{fid}/image1.png"
         assert result.files[1] == "/uploads/other-folder/image2.png"
-        assert result.files[2] == f"{session_id}/docs/file.pdf"
+        assert result.files[2] == f"{fid}/docs/file.pdf"
+
+    def test_from_message_new_playground_session(self):
+        """Test that file paths are normalized correctly for new Playground sessions.
+
+        Regression test for GitHub issue #12645: when session_id is a human-readable
+        string like 'New Session 0' (not a UUID), file paths must still be normalized
+        using flow_id, not session_id.
+        """
+        from langflow.services.database.models.message.model import MessageTable
+        from lfx.schema.image import Image
+
+        flow_id = uuid4()
+        fid = str(flow_id)
+        file_path = f"/root/.cache/langflow/{fid}/uploaded_image.png"
+        img = Image(path=file_path, url=f"http://example.com{file_path}")
+
+        message = Message(
+            text="Hello",
+            sender="User",
+            sender_name="User",
+            session_id="New Session 0",
+            files=[img],
+        )
+
+        result = MessageTable.from_message(message, flow_id=flow_id)
+
+        assert len(result.files) == 1
+        assert result.files[0] == f"{fid}/uploaded_image.png"
 
     def test_from_message_with_image_empty_path(self):
         """Test that Image with empty path is NOT added to image_paths.
