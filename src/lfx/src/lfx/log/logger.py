@@ -5,6 +5,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import threading
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -349,9 +350,15 @@ def configure(
         logging.root.addHandler(file_handler)
         logging.root.setLevel(numeric_level)
 
+    # Install InterceptHandler on the root stdlib logger
+    setup_stdlib_intercept(numeric_level)
+
     # Set up interceptors for uvicorn and gunicorn
     setup_uvicorn_logger()
     setup_gunicorn_logger()
+
+    # Intercept loguru if available
+    setup_loguru_intercept()
 
     # Create the global logger instance
     global logger  # noqa: PLW0603
@@ -383,26 +390,94 @@ def setup_gunicorn_logger() -> None:
 
 
 class InterceptHandler(logging.Handler):
-    """Intercept standard logging messages and route them to structlog."""
+    """Intercept standard logging messages and route them to structlog.
+
+    Uses a thread-local re-entry guard to prevent infinite recursion when
+    structlog is configured with ``stdlib.LoggerFactory`` (which routes
+    back through stdlib logging).
+    """
+
+    _local = threading.local()
 
     def emit(self, record: logging.LogRecord) -> None:
         """Emit a log record by passing it to structlog."""
-        # Get corresponding structlog logger
-        logger_name = record.name
-        structlog_logger = structlog.get_logger(logger_name)
+        # Prevent infinite recursion: structlog → stdlib → InterceptHandler → structlog
+        if getattr(self._local, "processing", False):
+            return
+        self._local.processing = True
+        try:
+            logger_name = record.name
+            structlog_logger = structlog.get_logger(logger_name)
 
-        # Map log levels
-        level = record.levelno
-        if level >= logging.CRITICAL:
-            structlog_logger.critical(record.getMessage())
-        elif level >= logging.ERROR:
-            structlog_logger.error(record.getMessage())
-        elif level >= logging.WARNING:
-            structlog_logger.warning(record.getMessage())
-        elif level >= logging.INFO:
-            structlog_logger.info(record.getMessage())
-        else:
-            structlog_logger.debug(record.getMessage())
+            # Map log levels
+            level = record.levelno
+            if level >= logging.CRITICAL:
+                structlog_logger.critical(record.getMessage())
+            elif level >= logging.ERROR:
+                structlog_logger.error(record.getMessage())
+            elif level >= logging.WARNING:
+                structlog_logger.warning(record.getMessage())
+            elif level >= logging.INFO:
+                structlog_logger.info(record.getMessage())
+            else:
+                structlog_logger.debug(record.getMessage())
+        finally:
+            self._local.processing = False
+
+
+def setup_stdlib_intercept(numeric_level: int) -> None:
+    """Install InterceptHandler on the root stdlib logger.
+
+    This ensures that any ``logging.getLogger(__name__).info(...)`` calls
+    from custom components are routed through the structlog pipeline and
+    appear in the configured log file.
+    """
+    root = logging.root
+
+    if not any(isinstance(h, InterceptHandler) for h in root.handlers):
+        root.addHandler(InterceptHandler())
+
+    root.setLevel(numeric_level)
+
+
+_loguru_intercepted = False
+
+
+def setup_loguru_intercept() -> None:
+    """Intercept loguru output and redirect it through structlog.
+
+    Many custom-component authors use ``from loguru import logger``.
+    If loguru is installed, add a sink that forwards messages to the
+    structlog pipeline so they appear in the log file.
+    """
+    global _loguru_intercepted  
+    if _loguru_intercepted:
+        return
+
+    try:
+        from loguru import logger as loguru_logger
+    except ImportError:
+        return
+
+    def _loguru_sink(message):
+        record = message.record
+        level = record["level"].name
+        structlog_logger = structlog.get_logger(record["name"] or "loguru")
+
+        level_map = {
+            "TRACE": "debug",
+            "DEBUG": "debug",
+            "INFO": "info",
+            "SUCCESS": "info",
+            "WARNING": "warning",
+            "ERROR": "error",
+            "CRITICAL": "critical",
+        }
+        method = level_map.get(level, "info")
+        getattr(structlog_logger, method)(str(record["message"]))
+
+    loguru_logger.add(_loguru_sink, format="{message}")
+    _loguru_intercepted = True
 
 
 # Initialize logger - will be reconfigured when configure() is called

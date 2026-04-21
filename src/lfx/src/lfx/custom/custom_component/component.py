@@ -1565,6 +1565,8 @@ class Component(CustomComponent):
     def log(self, message: LoggableType | list[LoggableType], name: str | None = None) -> None:
         """Logs a message.
 
+        Logs are sent to the UI (tracing service / event manager) and to the structlog file logger so they also appear in ``LANGFLOW_LOG_FILE`` when configured.
+
         Args:
             message (LoggableType | list[LoggableType]): The message to log.
             name (str, optional): The name of the log. Defaults to None.
@@ -1580,6 +1582,13 @@ class Component(CustomComponent):
             data["output"] = self._current_output
             data["component_id"] = self._id
             self._event_manager.on_log(data=data)
+
+        # Also emit to the structlog file logger so the message appears in LANGFLOW_LOG_FILE when configured.
+        from lfx.log.logger import logger as structlog_logger
+
+        component_name = getattr(self, "display_name", type(self).__name__)
+        log_text = str(message) if not isinstance(message, str) else message
+        structlog_logger.info(log_text, component=component_name, log_name=name)
 
     def _append_tool_output(self) -> None:
         if next((output for output in self.outputs if output.name == TOOL_OUTPUT_NAME), None) is None:
